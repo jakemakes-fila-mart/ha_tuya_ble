@@ -41,7 +41,6 @@ from .lock_commands import (
     build_delete_pin,
     parse_delete_report,
     parse_enroll_report,
-    validate_pin,
 )
 from .tuya_ble import BLE_CONNECTION_EXCEPTIONS, TuyaBLEDataPointType
 
@@ -98,9 +97,7 @@ def _device_for_call(hass: HomeAssistant, device_id: str) -> TuyaBLEDevice:
         data = loaded.get(entry_id)
         if data is not None:
             return cast("TuyaBLEDevice", data.device)
-    raise ServiceValidationError(
-        f"Device {device_id} is not a loaded Tuya BLE device"
-    )
+    raise ServiceValidationError(f"Device {device_id} is not a loaded Tuya BLE device")
 
 
 def _dp_for(device: TuyaBLEDevice, code: str) -> int:
@@ -226,9 +223,7 @@ async def _async_delete_pin(call: ServiceCall) -> None:
     async with _command_lock(hass, device):
         report = await _async_command(device, dp_id, payload, _match)
     if report.result_code == DELETE_RESULT_NOT_FOUND:
-        raise HomeAssistantError(
-            f"No PIN for member {member_id} in slot {hardware_id}"
-        )
+        raise HomeAssistantError(f"No PIN for member {member_id} in slot {hardware_id}")
     if not report.succeeded:
         raise HomeAssistantError(
             f"The lock refused to delete the PIN (result 0x{report.result_code:02x})"

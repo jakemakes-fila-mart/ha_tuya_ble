@@ -50,9 +50,7 @@ async def send_unlock_check(
         )
     except ValueError as exc:
         raise HomeAssistantError("The stored lock check code is malformed") from exc
-    datapoint = device.datapoints.get_or_create(
-        dp_id, TuyaBLEDataPointType.DT_RAW, b""
-    )
+    datapoint = device.datapoints.get_or_create(dp_id, TuyaBLEDataPointType.DT_RAW, b"")
     _LOGGER.debug(
         "%s: sending %s command on DP %s",
         device.address,
