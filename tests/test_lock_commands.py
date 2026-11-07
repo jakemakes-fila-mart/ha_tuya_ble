@@ -8,12 +8,13 @@ from custom_components.tuya_ble import lock_commands
 from custom_components.tuya_ble.lock_commands import (
     DeleteResult,
     EnrollResult,
+    UnlockCheckReport,
     build_add_pin,
     build_delete_pin,
     build_unlock_check,
     parse_delete_report,
     parse_enroll_report,
-    parse_unlock_check_result,
+    parse_unlock_check_report,
     validate_pin,
 )
 
@@ -127,7 +128,9 @@ def test_parse_delete_report(result: int, ok: bool) -> None:
     """The seventh byte is the result; 0xFF means deleted."""
     report = parse_delete_report(bytes([0x01, 0x00, 0x00, 0x02, 0x07, 0x01, result]))
 
-    assert report == DeleteResult(member_id=2, hardware_id=7, result_code=result)
+    assert report == DeleteResult(
+        member_id=2, hardware_id=7, method=1, result_code=result
+    )
     assert report.succeeded is ok
 
 
@@ -161,8 +164,25 @@ def test_build_unlock_check_rejects_non_ascii_codes() -> None:
         build_unlock_check("1234567é", unlock=True, timestamp=0)
 
 
-def test_parse_unlock_check_result() -> None:
-    """The result byte follows the 18-byte echo of the command."""
-    assert parse_unlock_check_result(bytes(18) + b"\x00") == 0
-    assert parse_unlock_check_result(bytes(18) + b"\x04") == 4
-    assert parse_unlock_check_result(bytes(18)) is None
+@pytest.mark.parametrize(
+    ("action", "result", "unlock", "ok"),
+    [(0x01, 0x00, True, True), (0x00, 0x00, False, True), (0x01, 0x04, True, False)],
+)
+def test_parse_unlock_check_report(
+    action: int, result: int, unlock: bool, ok: bool
+) -> None:
+    """The report echoes the ids, code, action and timestamp, then the result."""
+    raw = b"\x00\x01\xff\xff" + b"A1b2C3d4" + bytes([action])
+    raw += b"\x65\x53\xf1\x00" + bytes([0x00, result])
+
+    report = parse_unlock_check_report(raw)
+
+    assert report == UnlockCheckReport(
+        unlock=unlock, timestamp=0x6553F100, result_code=result
+    )
+    assert report.succeeded is ok
+
+
+def test_parse_unlock_check_report_rejects_short_frames() -> None:
+    """A frame shorter than 19 bytes is not a DP 71 report."""
+    assert parse_unlock_check_report(bytes(18)) is None

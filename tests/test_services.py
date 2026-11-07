@@ -12,6 +12,7 @@ from bleak.backends.scanner import AdvertisementData
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import device_registry as dr
+import probatio
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -116,13 +117,14 @@ async def test_add_pin_returns_the_assigned_slot(
     device, device_id = lock_device
     device.replies = [
         (1, TuyaBLEDataPointType.DT_BOOL, True),  # not a raw frame
-        _raw(9, [0x01, 0xFF, 0, 2, 5, 0, 0]),  # another data point
+        _raw(9, [0x01, 0xFF, 1, 2, 5, 0, 0]),  # another data point
         _raw(1, [0x01, 0xFF]),  # too short to be a report
-        _raw(1, [0x03, 0xFF, 0, 2, 5, 0, 0]),  # a fingerprint, not a PIN
-        _raw(1, [0x01, 0xFF, 0, 9, 5, 0, 0]),  # another member
-        _raw(1, [0x01, 0xFC, 0, 2, 5, 0, 0]),  # still in progress
-        _raw(1, [0x01, 0xFF, 0, 2, 5, 1, 0]),  # done: slot 5
-        _raw(1, [0x01, 0xFF, 0, 2, 6, 1, 0]),  # late duplicate is ignored
+        _raw(1, [0x03, 0xFF, 1, 2, 5, 0, 0]),  # a fingerprint, not a PIN
+        _raw(1, [0x01, 0xFF, 1, 9, 5, 0, 0]),  # another member
+        _raw(1, [0x01, 0xFF, 0, 2, 5, 0, 0]),  # not an admin PIN
+        _raw(1, [0x01, 0xFC, 1, 2, 5, 0, 0]),  # still in progress
+        _raw(1, [0x01, 0xFF, 1, 2, 5, 1, 0]),  # done: slot 5
+        _raw(1, [0x01, 0xFF, 1, 2, 6, 1, 0]),  # late duplicate is ignored
     ]
 
     with caplog.at_level(logging.DEBUG):
@@ -227,6 +229,7 @@ async def test_delete_pin_succeeds(
         _raw(2, [0x01, 0x00]),  # too short
         _raw(2, [0x01, 0x00, 0x00, 0x09, 0x07, 0x01, 0xFF]),  # another member
         _raw(2, [0x01, 0x00, 0x00, 0x03, 0x08, 0x01, 0xFF]),  # another slot
+        _raw(2, [0x03, 0x00, 0x00, 0x03, 0x07, 0x03, 0xFF]),  # a fingerprint
         _raw(2, [0x01, 0x00, 0x00, 0x03, 0x07, 0x01, 0xFF]),
     ]
 
@@ -262,3 +265,30 @@ async def test_commands_to_one_lock_share_a_lock(hass: HomeAssistant) -> None:
     first = services._command_lock(hass, device)
 
     assert services._command_lock(hass, device) is first
+
+
+@pytest.mark.parametrize("pin", [864209, 8.5, None])
+async def test_add_pin_needs_the_pin_as_text(
+    hass: HomeAssistant, lock_device: tuple[ReplyingDevice, str], pin: Any
+) -> None:
+    """A YAML number is rejected rather than silently converted."""
+    device, device_id = lock_device
+
+    with pytest.raises((probatio.Invalid, ServiceValidationError)) as err:
+        await _add_pin(hass, device_id, pin=pin)
+
+    assert "quoted text" in str(err.value)
+    assert str(pin) not in str(err.value)
+    assert device.payloads == []
+
+
+async def test_add_pin_refuses_a_non_raw_datapoint(
+    hass: HomeAssistant, lock_device: tuple[ReplyingDevice, str]
+) -> None:
+    """A credential frame is never coerced into another data point type."""
+    device, device_id = lock_device
+    device.datapoints.update_from_device(1, 0.0, 0, TuyaBLEDataPointType.DT_VALUE, 3)
+
+    with pytest.raises(HomeAssistantError, match="not raw"):
+        await _add_pin(hass, device_id)
+    assert device.payloads == []

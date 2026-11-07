@@ -174,6 +174,7 @@ class TuyaBLEDevice(TuyaBLEProtocol):
         self._datapoints = TuyaBLEDataPoints(self)
         self._function: dict[str, TuyaBLEDeviceFunction] = {}
         self._status_range: dict[str, TuyaBLEDeviceFunction] = {}
+        self._sensitive_dp_ids: frozenset[int] = frozenset()
 
         self._reconnect_task: asyncio.Task[None] | None = None
         self._resend_task: asyncio.Task[None] | None = None
@@ -393,12 +394,7 @@ class TuyaBLEDevice(TuyaBLEProtocol):
     @property
     def sensitive_dp_ids(self) -> frozenset[int]:
         """Return the DP ids whose values carry a PIN or unlock credential."""
-        return frozenset(
-            function.dp_id
-            for table in (self._function, self._status_range)
-            for code, function in table.items()
-            if code in SENSITIVE_DP_CODES
-        )
+        return self._sensitive_dp_ids
 
     def append_functions(
         self,
@@ -408,6 +404,12 @@ class TuyaBLEDevice(TuyaBLEProtocol):
         """Parse and store function/status_range credential lists."""
         self._append_function_list(function, self._function, "function")
         self._append_function_list(status_range, self._status_range, "status")
+        self._sensitive_dp_ids = frozenset(
+            entry.dp_id
+            for table in (self._function, self._status_range)
+            for code, entry in table.items()
+            if code in SENSITIVE_DP_CODES
+        )
 
     def _append_function_list(
         self,

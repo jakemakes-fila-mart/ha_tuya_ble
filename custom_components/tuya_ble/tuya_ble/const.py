@@ -30,11 +30,14 @@ RESPONSE_WAIT_TIMEOUT = 60
 # never logged or exported in diagnostics.
 SENSITIVE_DP_CODES = frozenset({
     "ble_unlock_check",
+    "check_code_set",
     "remote_no_dp_key",
+    "remote_pd_setkey_check",
     "temporary_password_creat",
     "temporary_password_modify",
     "unlock_method_create",
     "unlock_method_modify",
+    "unlock_offline_pd",
 })
 REDACTED = "**REDACTED**"
 

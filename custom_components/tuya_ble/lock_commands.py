@@ -42,7 +42,7 @@ UNLOCK_CHECK_ADMIN_MEMBER: Final = 0xFFFF
 UNLOCK_CHECK_VERSION: Final = 0x0001
 UNLOCK_CHECK_TRAILER: Final = b"\x00\x01"
 UNLOCK_CHECK_LENGTH: Final = 19
-UNLOCK_CHECK_RESULT_INDEX: Final = 18
+UNLOCK_CHECK_RESULT_SUCCESS: Final = 0x00
 
 # Permanent validity: 2000-01-01 00:00:00 to 2037-12-31 23:59:59 UTC. The end
 # stays below 2**31 so a lock that reads the field as signed cannot wrap it.
@@ -78,6 +78,7 @@ class DeleteResult:
 
     member_id: int
     hardware_id: int
+    method: int
     result_code: int
 
     @property
@@ -140,7 +141,10 @@ def build_add_pin(member_id: int, pin: str, *, admin: bool = False) -> bytes:
 def build_delete_pin(member_id: int, hardware_id: int) -> bytes:
     """Build the DP 2 ``unlock_method_delete`` payload for one PIN slot.
 
-    ``[type: specified method][stage][admin][member][hw id][method: password]``.
+    ``[type: specified method][stage][admin][member][hw id][method: password]``
+    per Tuya's reference. frankhommers reads the first byte as the credential
+    type and the last as "single"; for a password both readings give 0x01 in
+    both places, which is why only PIN deletion is offered.
     """
     _check_member(member_id)
     if not 0 <= hardware_id <= HARDWARE_ID_MAX:
@@ -173,7 +177,9 @@ def parse_delete_report(raw: bytes) -> DeleteResult | None:
     """Parse a DP 2 report: the command's six bytes followed by the result."""
     if len(raw) < 7:
         return None
-    return DeleteResult(member_id=raw[3], hardware_id=raw[4], result_code=raw[6])
+    return DeleteResult(
+        member_id=raw[3], hardware_id=raw[4], method=raw[5], result_code=raw[6]
+    )
 
 
 def build_unlock_check(check_code: str, *, unlock: bool, timestamp: int) -> bytes:
@@ -193,8 +199,29 @@ def build_unlock_check(check_code: str, *, unlock: bool, timestamp: int) -> byte
     )
 
 
-def parse_unlock_check_result(raw: bytes) -> int | None:
-    """Return the result byte of a DP 71 report (0 = success), if present."""
-    if len(raw) <= UNLOCK_CHECK_RESULT_INDEX:
+@dataclass(frozen=True)
+class UnlockCheckReport:
+    """A lock's DP 71 report answering a lock/unlock command."""
+
+    unlock: bool
+    timestamp: int
+    result_code: int
+
+    @property
+    def succeeded(self) -> bool:
+        """Return whether the lock carried out the command."""
+        return self.result_code == UNLOCK_CHECK_RESULT_SUCCESS
+
+
+def parse_unlock_check_report(raw: bytes) -> UnlockCheckReport | None:
+    """Parse a DP 71 report.
+
+    ``[peripheral id:2][central id:2][check code:8][action][timestamp:4]``
+    ``[method][result]``, the command's fields echoed with the result last.
+    """
+    if len(raw) < UNLOCK_CHECK_LENGTH:
         return None
-    return raw[UNLOCK_CHECK_RESULT_INDEX]
+    (timestamp,) = struct.unpack_from(">I", raw, 13)
+    return UnlockCheckReport(
+        unlock=raw[12] == 0x01, timestamp=timestamp, result_code=raw[18]
+    )

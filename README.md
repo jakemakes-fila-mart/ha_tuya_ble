@@ -67,7 +67,16 @@ response_variable: added
 ```
 
 A PIN added here exists only in the lock, not in the Smart Life app's member list. Keep the
-returned `hardware_id`: it is what `delete_pin` needs.
+returned `hardware_id`: it is what `delete_pin` needs. "Permanent" means valid until
+2037-12-31 23:59:59 UTC, the latest end date a lock that reads it as a signed 32-bit time can
+hold.
+
+- Give each PIN its own `member_id`. The lock's answer names the member, so two PINs added for
+  the same member close together can be confused if the first answer arrives late.
+- Pass the PIN as quoted text (`pin: "024680"`); a bare number is rejected rather than silently
+  changed. The PIN is never logged, but it is part of the action data, so automation and script
+  traces show it: call the action from a script that reads it from `!secret` or a password
+  helper rather than typing it into an automation.
 
 Some `jtmspro` locks only act on a lock/unlock command sent as a `ble_unlock_check` (DP 71)
 frame carrying an 8-character check code the cloud issues for that lock. The code is read

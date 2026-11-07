@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 from struct import pack
@@ -10,6 +11,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from bleak.exc import BleakDBusError, BleakError
 from homeassistant.components.lock import LockEntityDescription
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
@@ -17,7 +19,7 @@ from homeassistant.exceptions import HomeAssistantError
 import pytest
 
 import custom_components.tuya_ble as integration
-from custom_components.tuya_ble import cloud, diagnostics, lock
+from custom_components.tuya_ble import cloud, diagnostics, dp_command, lock
 from custom_components.tuya_ble.const import CONF_CHECK_CODE, DOMAIN
 from custom_components.tuya_ble.coordinator import TuyaBLECoordinator
 from custom_components.tuya_ble.device_descriptors.handlers import ble_lock
@@ -27,6 +29,7 @@ from custom_components.tuya_ble.tuya_ble import (
     TuyaBLEDataPointType,
     TuyaBLEDevice,
     TuyaBLEDeviceCredentials,
+    protocol_send,
 )
 from custom_components.tuya_ble.tuya_ble.const import REDACTED, TuyaBLECode
 from custom_components.tuya_ble.tuya_ble.datapoints import TuyaBLEDataPoints
@@ -346,20 +349,48 @@ def test_descriptor_wires_the_dp71_handlers() -> None:
 
 # --- DP 71 handler ---
 
+_NOW = 1_700_000_000
+
 
 def _handler_entity(device: TuyaBLEDevice) -> Any:
     return SimpleNamespace(device=device)
 
 
-def test_has_check_code() -> None:
-    """The lock is only available with a stored check code."""
+def _unlock_report(unlock: bool, timestamp: int = _NOW, result: int = 0) -> bytes:
+    return (
+        b"\x00\x01\xff\xff"
+        + _CODE.encode()
+        + bytes([0x01 if unlock else 0x00])
+        + pack(">I", timestamp)
+        + bytes([0x00, result])
+    )
+
+
+def _replying_send(
+    device: TuyaBLEDevice, sent: list[bytes], reports: list[bytes]
+) -> Any:
+    async def _send(ids: list[int]) -> None:
+        datapoint = device.datapoints[ids[0]]
+        assert datapoint is not None
+        sent.append(cast(bytes, datapoint.value))
+        for raw in reports:
+            reported = device.datapoints.update_from_device(
+                ids[0], 0.0, 0, TuyaBLEDataPointType.DT_RAW, raw, raw
+            )
+            device._fire_callbacks([reported])
+
+    return _send
+
+
+def test_has_check_code_needs_a_code_and_the_function() -> None:
+    """The lock is only available with a check code and a ble_unlock_check DP."""
     product = MagicMock()
 
     assert ble_lock.has_check_code(_handler_entity(_lock_device()), product) is True
-    assert (
-        ble_lock.has_check_code(_handler_entity(_lock_device(check_code=None)), product)
-        is False
-    )
+    variants: list[dict[str, Any]] = [{"check_code": None}, {"functions": []}]
+    for overrides in variants:
+        device = _lock_device(**overrides)
+        assert ble_lock.has_check_code(_handler_entity(device), product) is False
 
 
 @pytest.mark.parametrize(
@@ -367,41 +398,73 @@ def test_has_check_code() -> None:
     [
         (_FUNCTIONS, 71),
         ([{"code": "ble_unlock_check", "dp_id": 75, "type": "Raw"}], 75),
-        ([], 71),
     ],
 )
 @pytest.mark.parametrize("unlock", [True, False])
 async def test_send_unlock_check_writes_the_frame(
     functions: list[dict[str, Any]], dp_id: int, unlock: bool
 ) -> None:
-    """The frame goes to the device's ble_unlock_check DP, else DP 71."""
+    """The frame goes to the ble_unlock_check DP; stale reports are skipped."""
     device = _lock_device(functions=functions)
     sent: list[bytes] = []
-
-    async def _record(ids: list[int]) -> None:
-        datapoint = device.datapoints[ids[0]]
-        assert datapoint is not None
-        sent.append(cast(bytes, datapoint.value))
+    reports = [
+        b"\x00",  # too short
+        _unlock_report(not unlock),  # the other action
+        _unlock_report(unlock, timestamp=_NOW - 60),  # an earlier command
+        _unlock_report(unlock),
+    ]
 
     with (
-        patch.object(device, "send_datapoints", _record),
-        patch("time.time", return_value=1_700_000_000),
+        patch.object(device, "send_datapoints", _replying_send(device, sent, reports)),
+        patch("time.time", return_value=_NOW),
     ):
         await ble_lock.send_unlock_check(_handler_entity(device), MagicMock(), unlock)
 
-    assert sent == [build_unlock_check(_CODE, unlock=unlock, timestamp=1_700_000_000)]
-    assert device.datapoints[dp_id] is not None
+    assert sent == [build_unlock_check(_CODE, unlock=unlock, timestamp=_NOW)]
+    assert dp_id in device.sensitive_dp_ids
+
+
+async def test_send_unlock_check_reports_a_rejection() -> None:
+    """A non-zero result in the lock's DP 71 report fails the command."""
+    device = _lock_device()
+    send = _replying_send(device, [], [_unlock_report(True, result=0x04)])
+
+    with (
+        patch.object(device, "send_datapoints", send),
+        patch("time.time", return_value=_NOW),
+        pytest.raises(HomeAssistantError, match="rejected the unlock command"),
+    ):
+        await ble_lock.send_unlock_check(_handler_entity(device), MagicMock(), True)
+
+
+async def test_send_unlock_check_accepts_a_silent_lock(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A lock that does not report on DP 71 is not treated as a failure."""
+    device = _lock_device()
+    monkeypatch.setattr(ble_lock, "REPLY_TIMEOUT", 0.01)
+    caplog.set_level(logging.DEBUG)
+
+    with patch.object(device, "send_datapoints", _replying_send(device, [], [])):
+        await ble_lock.send_unlock_check(_handler_entity(device), MagicMock(), False)
+
+    assert "no DP 71 report for the command" in caplog.text
+    assert _CODE not in caplog.text
 
 
 @pytest.mark.parametrize(
-    ("check_code", "message"),
-    [(None, "no check code"), ("short", "malformed")],
+    ("overrides", "message"),
+    [
+        ({"check_code": None}, "no check code"),
+        ({"check_code": "short"}, "malformed"),
+        ({"functions": []}, "does not list ble_unlock_check"),
+    ],
 )
 async def test_send_unlock_check_refuses_without_a_valid_code(
-    check_code: str | None, message: str
+    overrides: dict[str, Any], message: str
 ) -> None:
-    """No frame is sent without a usable check code."""
-    device = _lock_device(check_code=check_code)
+    """No frame is sent without a usable check code and a listed DP."""
+    device = _lock_device(**overrides)
     send = AsyncMock()
 
     with (
@@ -410,6 +473,105 @@ async def test_send_unlock_check_refuses_without_a_valid_code(
     ):
         await ble_lock.send_unlock_check(_handler_entity(device), MagicMock(), True)
     send.assert_not_awaited()
+
+
+# --- raw credential writes ---
+
+
+async def test_send_raw_refuses_a_non_raw_datapoint() -> None:
+    """A DP the device reported with another type never gets a credential frame."""
+    device = _lock_device()
+    device.datapoints.update_from_device(71, 0.0, 0, TuyaBLEDataPointType.DT_VALUE, 5)
+    send = AsyncMock()
+
+    with (
+        patch.object(device, "send_datapoints", send),
+        pytest.raises(HomeAssistantError, match="DT_VALUE, not raw") as err,
+    ):
+        await dp_command.async_send_raw(device, 71, b"secret-frame")
+
+    send.assert_not_awaited()
+    assert "secret-frame" not in str(err.value)
+
+
+async def test_send_raw_without_a_matcher_returns_after_the_ack() -> None:
+    """With nothing to wait for, the call ends once the write is acknowledged."""
+    device = _lock_device()
+    send = AsyncMock()
+
+    with patch.object(device, "send_datapoints", send):
+        await dp_command.async_send_raw(device, 1, b"\x01")
+
+    send.assert_awaited_once_with([1])
+
+
+async def test_send_raw_bounds_the_whole_send(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A send stuck in connection retries is cancelled and rolled back."""
+    device = _lock_device()
+    monkeypatch.setattr(dp_command, "COMMAND_SEND_TIMEOUT", 0.01)
+
+    async def _stuck(_ids: list[int]) -> None:
+        await asyncio.sleep(10)
+
+    with (
+        patch.object(device, "send_datapoints", _stuck),
+        pytest.raises(HomeAssistantError, match="could not be reached"),
+    ):
+        await dp_command.async_send_raw(device, 1, b"\x01")
+
+    datapoint = device.datapoints[1]
+    assert datapoint is not None
+    assert datapoint.value == b""
+
+
+@pytest.mark.parametrize(("dp_id", "expected"), [(1, True), (47, False)])
+async def test_credential_writes_suppress_the_background_resend(
+    dp_id: int, expected: bool
+) -> None:
+    """Only a write that carries a credential DP is marked as never-resend."""
+    device = _lock_device()
+    device._protocol_version = 3
+    device.datapoints.get_or_create(dp_id, TuyaBLEDataPointType.DT_RAW, b"\x01")
+    seen: list[bool] = []
+
+    async def _send_packet(*_args: Any, **_kwargs: Any) -> None:
+        seen.append(protocol_send._NO_RESEND.get())
+
+    with patch.object(device, "_send_packet", _send_packet):
+        await device.send_datapoints([dp_id])
+
+    assert seen == [expected]
+    assert protocol_send._NO_RESEND.get() is False
+
+
+@pytest.mark.parametrize("no_resend", [True, False])
+@pytest.mark.parametrize("dbus", [True, False])
+async def test_failed_credential_packets_are_not_resent(
+    no_resend: bool, dbus: bool
+) -> None:
+    """A failed credential write reconnects instead of replaying its packets."""
+    device = _lock_device()
+    device._is_paired = True
+    failure: Exception = (
+        BleakDBusError("org.bluez.Error.Failed", []) if dbus else BleakError()
+    )
+    token = protocol_send._NO_RESEND.set(no_resend)
+    try:
+        with (
+            patch.object(
+                device, "_int_send_packets_locked", AsyncMock(side_effect=failure)
+            ),
+            patch.object(device, "_schedule_resend") as resend,
+            patch.object(device, "_schedule_reconnect") as reconnect,
+            patch.object(protocol_send, "BLEAK_BACKOFF_TIME", 0),
+            pytest.raises(BleakError),
+        ):
+            await device._send_packets_locked([b"packet"])
+    finally:
+        protocol_send._NO_RESEND.reset(token)
+
+    assert resend.called is not no_resend
+    assert reconnect.called is no_resend
 
 
 async def test_config_flow_stores_the_check_code(hass: HomeAssistant) -> None:

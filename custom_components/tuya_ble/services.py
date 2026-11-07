@@ -6,14 +6,14 @@ assigned; ``tuya_ble.delete_pin`` removes one slot through
 ``unlock_method_delete``. Both write the command and wait for the lock's report
 on the same data point, so the caller learns whether the lock accepted it.
 
-A PIN is a credential: it is validated here rather than by the schema (so an
-error message never echoes it) and is never logged.
+A PIN is a credential: it must be passed as text (a YAML number would silently
+change, e.g. an octal-looking ``01234567``), it is validated here rather than by
+the schema so an error message never echoes it, and it is never logged.
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
 import logging
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -29,6 +29,7 @@ from homeassistant.helpers import device_registry as dr
 import probatio
 
 from .const import DOMAIN
+from .dp_command import async_send_raw
 from .lock_commands import (
     CRED_TYPE_PASSWORD,
     DELETE_RESULT_NOT_FOUND,
@@ -42,10 +43,9 @@ from .lock_commands import (
     parse_delete_report,
     parse_enroll_report,
 )
-from .tuya_ble import BLE_CONNECTION_EXCEPTIONS, TuyaBLEDataPointType
 
 if TYPE_CHECKING:
-    from .tuya_ble import TuyaBLEDataPoint, TuyaBLEDevice
+    from .tuya_ble import TuyaBLEDevice
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -62,10 +62,20 @@ CREATE_CODE: Final = "unlock_method_create"
 DELETE_CODE: Final = "unlock_method_delete"
 
 # A PIN enrollment needs no input on the lock, so its report follows the
-# command almost at once; this only bounds a lock that never answers.
+# command almost at once; this only bounds a lock that never answers. A report
+# arriving after it can still match a later call for the same member and admin
+# flag, which is why the README asks for one member id per PIN.
 RESPONSE_TIMEOUT: Final = 15.0
 
 _LOCKS_KEY: Final = f"{DOMAIN}_pin_command_locks"
+
+
+def _pin_text(value: Any) -> str:
+    """Accept a PIN only as text; the message never contains the value."""
+    if not isinstance(value, str):
+        raise probatio.Invalid('PIN must be quoted text, for example pin: "024680"')
+    return value
+
 
 _MEMBER = probatio.All(
     probatio.Coerce(int), probatio.Range(min=MEMBER_ID_MIN, max=MEMBER_ID_MAX)
@@ -73,7 +83,7 @@ _MEMBER = probatio.All(
 
 ADD_PIN_SCHEMA: Final = probatio.Schema({
     probatio.Required(ATTR_DEVICE_ID): cv.string,
-    probatio.Required(ATTR_PIN): cv.string,
+    probatio.Required(ATTR_PIN): _pin_text,
     probatio.Optional(ATTR_MEMBER_ID, default=1): _MEMBER,
     probatio.Optional(ATTR_ADMIN, default=False): cv.boolean,
 })
@@ -117,56 +127,15 @@ def _command_lock(hass: HomeAssistant, device: TuyaBLEDevice) -> asyncio.Lock:
     return locks.setdefault(device.address, asyncio.Lock())
 
 
-async def _async_command[ResultT](
-    device: TuyaBLEDevice,
-    dp_id: int,
-    payload: bytes,
-    match: Callable[[bytes], ResultT | None],
-) -> ResultT:
-    """Write `payload` to `dp_id` and return the first matching report."""
-    future: asyncio.Future[ResultT] = asyncio.get_running_loop().create_future()
-
-    def _on_datapoints(datapoints: list[TuyaBLEDataPoint]) -> None:
-        if future.done():
-            return
-        for datapoint in datapoints:
-            if datapoint.dp_id != dp_id or not isinstance(datapoint.value, bytes):
-                continue
-            result = match(datapoint.value)
-            if result is not None:
-                future.set_result(result)
-                return
-
-    unregister = device.register_callback(_on_datapoints)
-    try:
-        datapoint = device.datapoints.get_or_create(
-            dp_id, TuyaBLEDataPointType.DT_RAW, b""
-        )
-        try:
-            await datapoint.set_value(payload)
-        except BLE_CONNECTION_EXCEPTIONS as exc:
-            raise HomeAssistantError("Could not send the command to the lock") from exc
-        try:
-            async with asyncio.timeout(RESPONSE_TIMEOUT):
-                return await future
-        except TimeoutError as exc:
-            raise HomeAssistantError(
-                f"The lock did not answer within {RESPONSE_TIMEOUT:.0f} seconds"
-            ) from exc
-    finally:
-        unregister()
-
-
 async def _async_add_pin(call: ServiceCall) -> ServiceResponse:
     """Enroll a permanent PIN and return the slot the lock assigned."""
     hass = call.hass
     device = _device_for_call(hass, call.data[ATTR_DEVICE_ID])
     dp_id = _dp_for(device, CREATE_CODE)
     member_id: int = call.data[ATTR_MEMBER_ID]
+    admin: bool = call.data[ATTR_ADMIN]
     try:
-        payload = build_add_pin(
-            member_id, call.data[ATTR_PIN], admin=call.data[ATTR_ADMIN]
-        )
+        payload = build_add_pin(member_id, call.data[ATTR_PIN], admin=admin)
     except ValueError as exc:
         # The message names the rule, never the PIN.
         raise ServiceValidationError(str(exc)) from None
@@ -177,13 +146,17 @@ async def _async_add_pin(call: ServiceCall) -> ServiceResponse:
             report is None
             or report.cred_type != CRED_TYPE_PASSWORD
             or report.member_id != member_id
+            or report.admin != admin
             or not report.is_final
         ):
             return None
         return report
 
     async with _command_lock(hass, device):
-        report = await _async_command(device, dp_id, payload, _match)
+        report = await async_send_raw(
+            device, dp_id, payload, match=_match, reply_timeout=RESPONSE_TIMEOUT
+        )
+    assert report is not None  # a reply is required
     if not report.succeeded:
         raise HomeAssistantError(
             f"The lock refused the PIN (stage 0x{report.stage:02x}, "
@@ -214,6 +187,7 @@ async def _async_delete_pin(call: ServiceCall) -> None:
         report = parse_delete_report(raw)
         if (
             report is None
+            or report.method != CRED_TYPE_PASSWORD
             or report.member_id != member_id
             or report.hardware_id != hardware_id
         ):
@@ -221,7 +195,10 @@ async def _async_delete_pin(call: ServiceCall) -> None:
         return report
 
     async with _command_lock(hass, device):
-        report = await _async_command(device, dp_id, payload, _match)
+        report = await async_send_raw(
+            device, dp_id, payload, match=_match, reply_timeout=RESPONSE_TIMEOUT
+        )
+    assert report is not None  # a reply is required
     if report.result_code == DELETE_RESULT_NOT_FOUND:
         raise HomeAssistantError(f"No PIN for member {member_id} in slot {hardware_id}")
     if not report.succeeded:
