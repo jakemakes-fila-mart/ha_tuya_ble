@@ -25,6 +25,7 @@ from .const import (
     CHARACTERISTIC_NOTIFY,
     MANUFACTURER_DATA_ID,
     PAIRING_REQUEST_LENGTH,
+    SENSITIVE_DP_CODES,
     SERVICE_UUID,
     DPType,
     TuyaBLECode,
@@ -323,6 +324,13 @@ class TuyaBLEDevice(TuyaBLEProtocol):
         return ""
 
     @property
+    def check_code(self) -> str | None:
+        """Return the lock check code for DP 71 commands, if the cloud gave one."""
+        if self._device_info is not None:
+            return self._device_info.check_code
+        return None
+
+    @property
     def category(self) -> str:
         """Return the device category."""
         if self._device_info is not None:
@@ -381,6 +389,16 @@ class TuyaBLEDevice(TuyaBLEProtocol):
     def status_range(self) -> dict[str, TuyaBLEDeviceFunction]:
         """Return the device status range definitions."""
         return self._status_range
+
+    @property
+    def sensitive_dp_ids(self) -> frozenset[int]:
+        """Return the DP ids whose values carry a PIN or unlock credential."""
+        return frozenset(
+            function.dp_id
+            for table in (self._function, self._status_range)
+            for code, function in table.items()
+            if code in SENSITIVE_DP_CODES
+        )
 
     def append_functions(
         self,

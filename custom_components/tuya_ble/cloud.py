@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Mapping
 import logging
-from typing import Any
+from typing import Any, Final
 
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
@@ -126,6 +127,34 @@ def _extract_local_strategy(
             "values": config.get("valueDesc"),
         })
     return result
+
+
+CHECK_CODE_STATUS_CODE: Final = "ble_unlock_check"
+_CHECK_CODE_OFFSET: Final = 4
+_CHECK_CODE_LENGTH: Final = 8
+
+
+def extract_check_code(device: CustomerDevice) -> str | None:
+    """Return the lock's DP 71 check code from the cloud status snapshot.
+
+    A jtmspro lock's last ``ble_unlock_check`` value, as the cloud stores it, is
+    base64 of ``[central id:2][peripheral id:2][check code:8]...``; the lock
+    verifies the same 8 characters on every DP 71 lock/unlock command. Layout as
+    read by frankhommers/ha-tuya-ble-access (MIT). The value is a credential, so
+    nothing here logs it.
+    """
+    status: Mapping[str, Any] = getattr(device, "status", None) or {}
+    value = status.get(CHECK_CODE_STATUS_CODE)
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        raw = base64.b64decode(value, validate=True)
+    except ValueError:  # binascii.Error is a ValueError
+        return None
+    code = raw[_CHECK_CODE_OFFSET : _CHECK_CODE_OFFSET + _CHECK_CODE_LENGTH]
+    if len(code) != _CHECK_CODE_LENGTH or not all(0x21 <= b <= 0x7E for b in code):
+        return None
+    return code.decode("ascii")
 
 
 def _extract_functions(device: CustomerDevice) -> list[dict[str, Any]]:
@@ -258,5 +287,6 @@ def _build_credentials(device: CustomerDevice) -> TuyaBLEDeviceCredentials:
         functions=_extract_functions(device),
         status_range=_extract_status_range(device),
         local_schema=capture_local_schema(device),
+        check_code=extract_check_code(device),
         cloud_info=capture_cloud_info(device),
     )

@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from homeassistant.components.diagnostics import async_redact_data
+from homeassistant.components.diagnostics import REDACTED, async_redact_data
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.const import __version__ as HA_VERSION
@@ -30,6 +30,7 @@ from .cloud import (
 )
 from .const import (
     CONF_CATEGORY,
+    CONF_CHECK_CODE,
     CONF_CLOUD_INFO,
     CONF_DEVICE_ID,
     CONF_DEVICE_NAME,
@@ -64,6 +65,7 @@ _LOGGER = logging.getLogger(__name__)
 # `cloud_info`; they stay redacted across the whole payload even though the
 # capture is allowlisted now.
 _TO_REDACT = frozenset({
+    CONF_CHECK_CODE,
     CONF_ENDPOINT,
     CONF_LOCAL_KEY,
     CONF_TERMINAL_ID,
@@ -180,13 +182,23 @@ def _live_section(device: TuyaBLEDevice | None) -> dict[str, Any]:
     if device is None:
         return {}
 
+    sensitive = device.sensitive_dp_ids
     return {
-        str(dp.dp_id): {
-            "type": dp.dp_type.name if dp.dp_type is not None else None,
-            "value": _serialize_value(dp.value),
-            "raw": dp.raw_value.hex() if dp.raw_value is not None else None,
-            "changed_by_device": dp.changed_by_device,
-        }
+        str(dp.dp_id): (
+            {
+                "type": dp.dp_type.name if dp.dp_type is not None else None,
+                "value": REDACTED,
+                "raw": REDACTED,
+                "changed_by_device": dp.changed_by_device,
+            }
+            if dp.dp_id in sensitive
+            else {
+                "type": dp.dp_type.name if dp.dp_type is not None else None,
+                "value": _serialize_value(dp.value),
+                "raw": dp.raw_value.hex() if dp.raw_value is not None else None,
+                "changed_by_device": dp.changed_by_device,
+            }
+        )
         for dp in device.datapoints.values()
     }
 

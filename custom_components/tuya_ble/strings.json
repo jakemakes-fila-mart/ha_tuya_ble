@@ -152,7 +152,9 @@
         "state": {
           "high": "High",
           "low": "[%key:component::binary_sensor::entity_component::battery::state::on%]",
-          "normal": "[%key:component::binary_sensor::entity_component::battery::state::off%]"
+          "normal": "[%key:component::binary_sensor::entity_component::battery::state::off%]",
+          "medium": "Medium",
+          "poweroff": "Empty"
         }
       },
       "carbon_dioxide": {
@@ -329,6 +331,48 @@
       },
       "scan": {
         "description": "Waiting for QR code scan..."
+      }
+    }
+  },
+  "services": {
+    "add_pin": {
+      "name": "Add PIN",
+      "description": "Adds a permanent keypad PIN to a Tuya BLE lock. Returns the slot (hardware ID) the lock assigned; keep it to delete the PIN later.",
+      "fields": {
+        "device_id": {
+          "name": "Lock",
+          "description": "The Tuya BLE lock to add the PIN to."
+        },
+        "pin": {
+          "name": "PIN",
+          "description": "4 to 10 digits. Never logged."
+        },
+        "member_id": {
+          "name": "Member ID",
+          "description": "Lock member (1 to 100) the PIN belongs to. 1 is usually the owner."
+        },
+        "admin": {
+          "name": "Admin",
+          "description": "Enroll the PIN with the lock's admin flag."
+        }
+      }
+    },
+    "delete_pin": {
+      "name": "Delete PIN",
+      "description": "Deletes one keypad PIN from a Tuya BLE lock by its slot (hardware ID).",
+      "fields": {
+        "device_id": {
+          "name": "Lock",
+          "description": "The Tuya BLE lock to delete the PIN from."
+        },
+        "hardware_id": {
+          "name": "Slot",
+          "description": "Hardware ID the lock assigned when the PIN was added (0 to 254)."
+        },
+        "member_id": {
+          "name": "Member ID",
+          "description": "Lock member (1 to 100) the PIN belongs to."
+        }
       }
     }
   }

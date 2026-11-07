@@ -47,6 +47,35 @@ The integration works locally, but connecting to a Tuya BLE device requires a de
 2. Scan the displayed QR code in your Smart Life / Tuya Smart app
 3. Select your BLE device from the discovered list
 
+## Lock PINs and remote lock/unlock
+
+Locks that report the `unlock_method_create` and `unlock_method_delete` data points accept
+keypad PINs from Home Assistant through two actions:
+
+- **`tuya_ble.add_pin`**: `device_id`, `pin` (4 to 10 digits), optional `member_id` (1 to
+  100, default 1) and `admin`. The PIN is permanent. The action waits for the lock to
+  confirm and returns `member_id` and `hardware_id`, the slot the lock stored the PIN in.
+- **`tuya_ble.delete_pin`**: `device_id`, `hardware_id` and optional `member_id`. It fails if
+  the lock reports no PIN in that slot.
+
+```yaml
+action: tuya_ble.add_pin
+data:
+  device_id: 0123456789abcdef0123456789abcdef
+  pin: "246810"
+response_variable: added
+```
+
+A PIN added here exists only in the lock, not in the Smart Life app's member list. Keep the
+returned `hardware_id`: it is what `delete_pin` needs.
+
+Some `jtmspro` locks only act on a lock/unlock command sent as a `ble_unlock_check` (DP 71)
+frame carrying an 8-character check code the cloud issues for that lock. The code is read
+from the cloud's status snapshot when the device is **added**, so a lock added before this
+support existed needs to be removed and added again. Without a code the lock entity stays
+unavailable. The check code, PINs and every credential data point are redacted from logs and
+diagnostics.
+
 ## Debug logging
 
 The integration is silent at the `info` level. To capture a detailed trace — useful when a device is not discovered, an entity never appears, or a value looks wrong — raise the relevant loggers to `debug` in `configuration.yaml`:
@@ -137,8 +166,9 @@ even when the device is offline or the cloud is unreachable. When re-authenticat
 credentials are available the integration refreshes the schema from the cloud first; if
 that fails it falls back to the stored copy and says so in the `schema_source` field.
 
-Secrets are removed before the file is written — local key, access and refresh tokens, user
-code, terminal ID and cloud endpoint. The MAC `uuid`, the cloud `device_id`, product and
+Secrets are removed before the file is written — local key, lock check code, access and
+refresh tokens, user code, terminal ID and cloud endpoint, and the values of lock data points
+that carry a PIN or the check code. The MAC `uuid`, the cloud `device_id`, product and
 data point ids, and entity data are **not** removed: they identify the device without being
 able to reach it, and a download that cannot be matched to the reported problem is not much
 use. Review a file before attaching it to a public issue.
@@ -202,3 +232,8 @@ This integration's QR code login approach was inspired by
 [tuya-local-key](https://github.com/vineetchoudhary/tuya-local-key),
 which demonstrates retrieving Tuya device local keys via QR code login
 without requiring a Tuya IoT developer account.
+
+The lock PIN and `ble_unlock_check` frame layouts follow Tuya's BLE lock data point reference
+and the app captures documented in
+[frankhommers/ha-tuya-ble-access](https://github.com/frankhommers/ha-tuya-ble-access)
+(MIT, Copyright (c) 2026 Frank Hommers).

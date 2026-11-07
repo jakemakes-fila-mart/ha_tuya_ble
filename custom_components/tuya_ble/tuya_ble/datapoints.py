@@ -11,7 +11,7 @@ from struct import pack
 import time
 from typing import TYPE_CHECKING
 
-from .const import TuyaBLEDataPointType
+from .const import REDACTED, TuyaBLEDataPointType
 from .exceptions import (
     BLE_CONNECTION_EXCEPTIONS,
     TuyaBLEDataFormatError,
@@ -71,13 +71,17 @@ class TuyaBLEDataPoint:
             _LOGGER.debug(
                 "Data point %s changed by device: %s -> %s (%s)",
                 self._id,
-                self._value,
-                value,
+                self.loggable(self._value),
+                self.loggable(value),
                 dp_type,
             )
         self._value = value
         self._raw_value = raw_value
         self._revision += 1
+
+    def loggable(self, value: object) -> object:
+        """Return `value`, or a redaction marker if this DP carries a credential."""
+        return REDACTED if self._owner.is_sensitive(self._id) else value
 
     @staticmethod
     def _pack_enum(value: int) -> bytes:
@@ -202,7 +206,7 @@ class TuyaBLEDataPoint:
         _LOGGER.debug(
             "Data point %s set locally without notifying the device: %s",
             self._id,
-            self._value,
+            self.loggable(self._value),
         )
 
     async def set_value(self, value: TuyaBLEDataPointValue) -> None:
@@ -265,6 +269,10 @@ class TuyaBLEDataPoints:
     def values(self) -> Iterable[TuyaBLEDataPoint]:
         """Iterate over every data point known so far, in dp id order."""
         return [self._datapoints[dp_id] for dp_id in sorted(self._datapoints)]
+
+    def is_sensitive(self, dp_id: int) -> bool:
+        """Return whether `dp_id` carries a PIN or unlock credential."""
+        return dp_id in getattr(self._owner, "sensitive_dp_ids", frozenset())
 
     def has_id(self, dp_id: int, dp_type: TuyaBLEDataPointType | None = None) -> bool:
         """Check if a data point with the given ID exists."""

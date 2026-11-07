@@ -24,6 +24,20 @@ MANUFACTURER_DATA_ID = 0x07D0
 
 RESPONSE_WAIT_TIMEOUT = 60
 
+# Lock data points whose payload carries a credential: a PIN being enrolled or
+# changed, or the check code that authorises a DP 71 lock/unlock. They are
+# matched by Tuya code (the DP id differs per product), and their values are
+# never logged or exported in diagnostics.
+SENSITIVE_DP_CODES = frozenset({
+    "ble_unlock_check",
+    "remote_no_dp_key",
+    "temporary_password_creat",
+    "temporary_password_modify",
+    "unlock_method_create",
+    "unlock_method_modify",
+})
+REDACTED = "**REDACTED**"
+
 # The pairing request is a fixed-size frame holding uuid + local_key + device_id,
 # zero-padded to the end. The field widths below are the protocol's own limits and
 # are enforced when the credentials are created, so a corrupt cloud response cannot

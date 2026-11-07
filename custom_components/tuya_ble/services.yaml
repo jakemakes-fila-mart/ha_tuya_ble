@@ -1,0 +1,45 @@
+add_pin:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: tuya_ble
+    pin:
+      required: true
+      example: "246810"
+      selector:
+        text:
+          type: password
+    member_id:
+      default: 1
+      selector:
+        number:
+          min: 1
+          max: 100
+          mode: box
+    admin:
+      default: false
+      selector:
+        boolean:
+delete_pin:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: tuya_ble
+    hardware_id:
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 254
+          mode: box
+    member_id:
+      default: 1
+      selector:
+        number:
+          min: 1
+          max: 100
+          mode: box
