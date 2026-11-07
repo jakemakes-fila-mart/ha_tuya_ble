@@ -34,6 +34,7 @@ from custom_components.tuya_ble.tuya_ble import (
 from custom_components.tuya_ble.tuya_ble.const import REDACTED, TuyaBLECode
 from custom_components.tuya_ble.tuya_ble.datapoints import TuyaBLEDataPoints
 from tests.conftest import (
+    FakeBleakClient,
     FakeBLEManager,
     FakeDatapointsOwner,
     build_context,
@@ -164,7 +165,9 @@ def test_device_check_code_and_sensitive_ids() -> None:
     device = _lock_device()
 
     assert device.check_code == _CODE
-    assert device.sensitive_dp_ids == frozenset({1, 51, 71})
+    # Codes give 1, 51 and 71; the lock-category fallback adds 3 and 53.
+    assert device.sensitive_dp_ids == frozenset({1, 3, 51, 53, 71})
+    assert device.no_resend_dp_ids == device.sensitive_dp_ids
 
 
 def test_device_without_credentials_has_no_check_code() -> None:
@@ -515,7 +518,7 @@ async def test_send_raw_bounds_the_whole_send(monkeypatch: pytest.MonkeyPatch) -
 
     with (
         patch.object(device, "send_datapoints", _stuck),
-        pytest.raises(HomeAssistantError, match="could not be reached"),
+        pytest.raises(HomeAssistantError, match="may or may not have acted"),
     ):
         await dp_command.async_send_raw(device, 1, b"\x01")
 
@@ -592,3 +595,104 @@ async def test_config_flow_stores_the_check_code(hass: HomeAssistant) -> None:
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
     assert cast(dict[str, Any], result["data"])[CONF_CHECK_CODE] == _CODE
+
+
+def test_lock_category_redacts_credential_dps_without_function_lists() -> None:
+    """An entry saved before function lists were stored still redacts DP 1/71."""
+    device = _lock_device(functions=None, status_range=None)
+
+    assert device.sensitive_dp_ids == frozenset({1, 3, 51, 53, 71})
+    assert ble_lock.has_check_code(_handler_entity(device), MagicMock()) is False
+
+
+def test_non_lock_devices_get_no_fallback_ids() -> None:
+    """The fallback is for lock categories only."""
+    device = _lock_device(category="wk", functions=None, status_range=None)
+
+    assert device.sensitive_dp_ids == frozenset()
+
+
+def test_pin_deletion_is_never_resent() -> None:
+    """A deletion is not a credential, but it is not replayed either."""
+    functions = [
+        *_FUNCTIONS,
+        {"code": "unlock_method_delete", "dp_id": 2, "type": "Raw"},
+    ]
+    device = _lock_device(functions=functions)
+
+    assert 2 not in device.sensitive_dp_ids
+    assert 2 in device.no_resend_dp_ids
+
+
+def test_credentials_repr_hides_secrets() -> None:
+    """The dataclass repr shows neither the local key nor the check code."""
+    text = repr(_credentials(local_key="hidden-local-key"))
+
+    assert "hidden-local-key" not in text
+    assert _CODE not in text
+
+
+async def test_an_echo_of_the_command_is_not_a_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lock echoing the written frame back is not read as result 0x01."""
+    device = _lock_device()
+    monkeypatch.setattr(ble_lock, "REPLY_TIMEOUT", 0.01)
+    echo = build_unlock_check(_CODE, unlock=True, timestamp=_NOW)
+    assert echo[18] == 0x01
+
+    with (
+        patch.object(device, "send_datapoints", _replying_send(device, [], [echo])),
+        patch("time.time", return_value=_NOW),
+    ):
+        await ble_lock.send_unlock_check(_handler_entity(device), MagicMock(), True)
+
+
+async def test_cancelled_handshake_drops_the_connection() -> None:
+    """A deadline that cancels the handshake leaves no half-configured client."""
+    device = _lock_device()
+    client = FakeBleakClient()
+    started = asyncio.Event()
+
+    async def _hang() -> bool:
+        started.set()
+        await asyncio.sleep(10)
+        return True
+
+    with (
+        patch.object(
+            device, "_try_establish_connection", AsyncMock(return_value=client)
+        ),
+        patch.object(device, "_try_start_notifications", _hang),
+    ):
+        task = asyncio.ensure_future(device._try_connect_and_configure())
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert device._client is None
+    assert device._is_paired is False
+    assert client.is_connected is False
+
+
+async def test_failed_credential_write_is_not_resent_end_to_end() -> None:
+    """Through the real send path, a failed DP 71 write reconnects, never resends."""
+    device = _lock_device()
+    device._protocol_version = 3
+    device._session_key = bytes(16)
+    device._is_paired = True
+    device._client = cast(Any, FakeBleakClient(is_connected=False))
+    datapoint = device.datapoints.get_or_create(71, TuyaBLEDataPointType.DT_RAW, b"")
+
+    with (
+        patch.object(device, "_ensure_connected", AsyncMock()),
+        patch.object(device, "_schedule_resend") as resend,
+        patch.object(device, "_schedule_reconnect") as reconnect,
+        pytest.raises(BleakError),
+    ):
+        await datapoint.set_value(b"\x00" * 19)
+
+    resend.assert_not_called()
+    reconnect.assert_called_once()
+    assert datapoint.value == b""

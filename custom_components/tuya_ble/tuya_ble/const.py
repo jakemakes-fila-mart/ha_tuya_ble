@@ -39,6 +39,19 @@ SENSITIVE_DP_CODES = frozenset({
     "unlock_method_modify",
     "unlock_offline_pd",
 })
+# A failed write to any of these is never replayed in the background: besides
+# the credential DPs, a late PIN deletion could remove a PIN after Home
+# Assistant reported the deletion as failed.
+NO_RESEND_DP_CODES = SENSITIVE_DP_CODES | {
+    "temporary_password_delete",
+    "unlock_method_delete",
+}
+# Tuya's standard lock DPs that carry a credential (unlock_method_create,
+# unlock_method_modify, temporary_password_creat, temporary_password_modify,
+# ble_unlock_check), redacted for lock categories even when the cloud function
+# lists are missing.
+LOCK_CATEGORIES = frozenset({"jtmspro", "ms"})
+LOCK_FALLBACK_SENSITIVE_DP_IDS = frozenset({1, 3, 51, 53, 71})
 REDACTED = "**REDACTED**"
 
 # The pairing request is a fixed-size frame holding uuid + local_key + device_id,

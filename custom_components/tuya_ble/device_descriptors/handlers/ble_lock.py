@@ -76,6 +76,11 @@ async def send_unlock_check(
         raise HomeAssistantError("The stored lock check code is malformed") from exc
 
     def _match(raw: bytes) -> UnlockCheckReport | None:
+        # A lock that echoes the written value back unchanged has not answered
+        # yet; read as a report, the command's 00 01 trailer would look like a
+        # rejection.
+        if raw == payload:
+            return None
         report = parse_unlock_check_report(raw)
         if report is None or report.unlock != unlock or report.timestamp != timestamp:
             return None

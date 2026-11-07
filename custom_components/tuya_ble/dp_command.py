@@ -69,8 +69,9 @@ async def async_send_raw[ResultT](
                 await datapoint.set_value(payload)
         except TimeoutError as exc:
             raise HomeAssistantError(
-                f"The lock could not be reached within {COMMAND_SEND_TIMEOUT:.0f} "
-                "seconds; it may not have received the command"
+                f"The lock did not confirm the command within "
+                f"{COMMAND_SEND_TIMEOUT:.0f} seconds; it may or may not have acted, "
+                "so check its state before trying again"
             ) from exc
         except BLE_CONNECTION_EXCEPTIONS as exc:
             raise HomeAssistantError("Could not send the command to the lock") from exc

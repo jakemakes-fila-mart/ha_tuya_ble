@@ -77,6 +77,9 @@ hold.
   changed. The PIN is never logged, but it is part of the action data, so automation and script
   traces show it: call the action from a script that reads it from `!secret` or a password
   helper rather than typing it into an automation.
+- A template that renders an all-digit PIN (`"{{ states('input_text.pin') }}"`) becomes a
+  number in Home Assistant and is rejected for the same reason; pass the PIN from a script
+  variable or `!secret` instead.
 
 Some `jtmspro` locks only act on a lock/unlock command sent as a `ble_unlock_check` (DP 71)
 frame carrying an 8-character check code the cloud issues for that lock. The code is read

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
 from typing import Any
 
@@ -17,7 +17,7 @@ class TuyaBLEDeviceCredentials:
     """Credentials needed to connect to a Tuya BLE device."""
 
     uuid: str
-    local_key: str
+    local_key: str = field(repr=False)
     device_id: str
     category: str
     product_id: str
@@ -28,7 +28,7 @@ class TuyaBLEDeviceCredentials:
     status_range: list[Any] | None = None
     local_schema: dict[str, Any] | None = None
     cloud_info: dict[str, Any] | None = None
-    check_code: str | None = None
+    check_code: str | None = field(default=None, repr=False)
 
     def __str__(self) -> str:
         return (

@@ -175,7 +175,8 @@ class TuyaBLEProtocolSendMixin:
             data += pack(">BBB", dp.dp_id, int(dp.dp_type.value), len(value))
             data += value
 
-        if any(self._datapoints.is_sensitive(dp_id) for dp_id in datapoint_ids):
+        no_resend: frozenset[int] = getattr(self, "no_resend_dp_ids", frozenset())
+        if any(dp_id in no_resend for dp_id in datapoint_ids):
             token = _NO_RESEND.set(True)
             try:
                 await self._send_packet(TuyaBLECode.FUN_SENDER_DPS, bytes(data))
