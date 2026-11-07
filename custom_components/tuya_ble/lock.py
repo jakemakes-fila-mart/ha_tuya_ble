@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from homeassistant.components.lock import (
@@ -29,6 +29,15 @@ TuyaBLELockGetter = Callable[["TuyaBLELock", TuyaBLEProductInfo], bool | None] |
 TuyaBLELockIsAvailable = Callable[["TuyaBLELock", TuyaBLEProductInfo], bool] | None
 
 
+# A write handler sends the lock or unlock command itself (``True`` = unlock),
+# for locks whose command is not a plain boolean on the state DP, e.g. the
+# jtmspro DP 71 ``ble_unlock_check`` frame. It is awaited, so a failed send
+# surfaces to the caller instead of being lost in a background task.
+TuyaBLELockSetter = (
+    Callable[["TuyaBLELock", TuyaBLEProductInfo, bool], Awaitable[None]] | None
+)
+
+
 @dataclass
 class TuyaBLELockMapping:
     """Mapping of a Tuya BLE data point to a Home Assistant lock entity."""
@@ -39,6 +48,7 @@ class TuyaBLELockMapping:
     dp_type: TuyaBLEDataPointType | None = None
     is_available: TuyaBLELockIsAvailable = None
     getter: TuyaBLELockGetter = None
+    setter: TuyaBLELockSetter = None
     door_dp_id: int | None = None
 
 
@@ -69,6 +79,7 @@ def _build_lock_mapping(desc: EntityDescriptor) -> TuyaBLELockMapping:
         ),
         is_available=desc.resolved_handler("when"),
         getter=desc.resolved_handler("read"),
+        setter=desc.resolved_handler("write"),
         door_dp_id=desc.door_dp_id,
     )
 
@@ -152,6 +163,9 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
 
     async def async_lock(self, **kwargs: object) -> None:
         """Lock the device."""
+        if self._mapping.setter is not None:
+            await self._mapping.setter(self, self._product, False)
+            return
         datapoint = self.device.datapoints.get_or_create(
             self._mapping.dp_id,
             TuyaBLEDataPointType.DT_BOOL,
@@ -161,6 +175,9 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
 
     async def async_unlock(self, **kwargs: object) -> None:
         """Unlock the device."""
+        if self._mapping.setter is not None:
+            await self._mapping.setter(self, self._product, True)
+            return
         datapoint = self.device.datapoints.get_or_create(
             self._mapping.dp_id,
             TuyaBLEDataPointType.DT_BOOL,

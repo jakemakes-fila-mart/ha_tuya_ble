@@ -320,7 +320,12 @@ class TuyaBLEEntity(CoordinatorEntity["TuyaBLECoordinator"]):
             dp_type,
             value,
         )
-        _LOGGER.debug("%s: sending data point %s = %s", self.device.address, key, value)
+        _LOGGER.debug(
+            "%s: sending data point %s = %s",
+            self.device.address,
+            key,
+            datapoint.loggable(value),
+        )
         self.hass.create_task(datapoint.set_value(value))
 
     def send_multiple_dp_values(
@@ -336,7 +341,12 @@ class TuyaBLEEntity(CoordinatorEntity["TuyaBLECoordinator"]):
             "%s: sending %d data point(s): %s",
             self.device.address,
             len(dp_updates),
-            dp_updates,
+            {
+                key: datapoint.loggable(value)
+                if (datapoint := self.device.datapoints[key]) is not None
+                else value
+                for key, value in dp_updates.items()
+            },
         )
         self.hass.create_task(self.device.set_multiple_values(dp_updates))
 

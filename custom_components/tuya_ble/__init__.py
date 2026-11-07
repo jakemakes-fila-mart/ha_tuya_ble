@@ -14,10 +14,13 @@ from homeassistant.const import (
     Platform,
 )
 from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.typing import ConfigType
 
 from .const import (
     CONF_CATEGORY,
+    CONF_CHECK_CODE,
     CONF_DEVICE_ID,
     CONF_DEVICE_NAME,
     CONF_FUNCTIONS,
@@ -32,6 +35,7 @@ from .const import (
 from .device_registry import async_setup_registry
 from .devices import TuyaBLECoordinator, TuyaBLEData, get_device_product_info
 from .entity import evict_legacy_suffix_cache
+from .services import async_setup_services
 from .tuya_ble import (
     BLE_CONNECTION_EXCEPTIONS,
     AbstractTuyaBLEDeviceManager,
@@ -55,6 +59,14 @@ PLATFORMS: list[Platform] = [
     Platform.TEXT,
     Platform.VALVE,
 ]
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Register the integration-wide services."""
+    async_setup_services(hass)
+    return True
 
 
 class OfflineTuyaBLEDeviceManager(AbstractTuyaBLEDeviceManager):
@@ -86,6 +98,7 @@ def _build_credentials_from_entry(entry: ConfigEntry) -> TuyaBLEDeviceCredential
         product_name=data.get(CONF_PRODUCT_NAME),
         functions=data.get(CONF_FUNCTIONS),
         status_range=data.get(CONF_STATUS_RANGE),
+        check_code=data.get(CONF_CHECK_CODE),
     )
 
 

@@ -26,6 +26,7 @@ from tuya_sharing import LoginControl
 from .cloud import HASSTuyaBLEDeviceManager
 from .const import (
     CONF_CATEGORY,
+    CONF_CHECK_CODE,
     CONF_CLOUD_INFO,
     CONF_DEVICE_NAME,
     CONF_ENDPOINT,
@@ -354,6 +355,8 @@ class TuyaBLEConfigFlow(ConfigFlow, _QRCodeLoginMixin, domain=DOMAIN):
             CONF_LOCAL_SCHEMA: credentials.local_schema,
             CONF_CLOUD_INFO: credentials.cloud_info,
         }
+        if credentials.check_code:
+            entry_data[CONF_CHECK_CODE] = credentials.check_code
         _LOGGER.debug(
             "%s: config entry created (category: %s, product_id: %s, device_name: %s)",
             address,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Coroutine
+from contextvars import ContextVar
 from functools import partial
 import logging
 import secrets
@@ -33,6 +34,12 @@ from .exceptions import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# Set while a write carrying a PIN or unlock credential is in flight. Such a
+# write must never be replayed by the background resend after its caller has
+# already been told it failed: a delayed DP 71 frame could unlock a door after
+# Home Assistant reported the unlock as failed, or after a later lock command.
+_NO_RESEND: ContextVar[bool] = ContextVar("tuya_ble_no_resend", default=False)
 
 # The v3 datapoint envelope encodes each datapoint as three single-byte fields
 # (dp_id, dp_type, value length), which bounds both to this value.
@@ -161,13 +168,21 @@ class TuyaBLEProtocolSendMixin:
                 self.address,
                 dp.dp_id,
                 dp.dp_type.name,
-                dp.value,
+                dp.loggable(dp.value),
             )
             if not 0 <= dp.dp_id <= MAX_BYTE or len(value) > MAX_BYTE:
                 raise TuyaBLEOutgoingDataLengthError(dp_id)
             data += pack(">BBB", dp.dp_id, int(dp.dp_type.value), len(value))
             data += value
 
+        no_resend: frozenset[int] = getattr(self, "no_resend_dp_ids", frozenset())
+        if any(dp_id in no_resend for dp_id in datapoint_ids):
+            token = _NO_RESEND.set(True)
+            try:
+                await self._send_packet(TuyaBLECode.FUN_SENDER_DPS, bytes(data))
+            finally:
+                _NO_RESEND.reset(token)
+            return
         await self._send_packet(TuyaBLECode.FUN_SENDER_DPS, bytes(data))
 
     @staticmethod
@@ -502,7 +517,7 @@ class TuyaBLEProtocolSendMixin:
                 BLEAK_BACKOFF_TIME,
                 ex,
             )
-            if self._is_paired:
+            if self._is_paired and not _NO_RESEND.get():
                 self._schedule_resend(packets)
             else:
                 self._schedule_reconnect()
@@ -515,7 +530,7 @@ class TuyaBLEProtocolSendMixin:
                 self.rssi,
                 ex,
             )
-            if self._is_paired:
+            if self._is_paired and not _NO_RESEND.get():
                 self._schedule_resend(packets)
             else:
                 self._schedule_reconnect()

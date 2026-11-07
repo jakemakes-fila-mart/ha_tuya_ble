@@ -1,0 +1,77 @@
+category: jtmspro
+product_id: 6hqka6he
+device_name: Smart Lock
+model_name: 6hqka6he
+entities:
+  lock:
+    # DP 47 lock_motor_state only reports; the lock acts on a DP 71
+    # ble_unlock_check frame carrying its cloud-issued check code. Without a
+    # stored check code the entity is unavailable rather than sending a write
+    # the lock ignores.
+    - dp_id: 47
+      translation_key: lock
+      handlers:
+        write: ble_lock.send_unlock_check
+        when: ble_lock.has_check_code
+  binary_sensor:
+    # Flips on every unlock, so a repeat by the same finger or code still
+    # records an event even when the unlock sensors below keep their value.
+    - dp_id: 47
+      translation_key: lock_motor_state
+      name: Unlocked
+      device_class: lock
+  sensor:
+    # Each unlock_* DP reports the id of the fingerprint, code, card or member
+    # that unlocked.
+    - dp_id: 12
+      translation_key: unlock_fingerprint
+      name: Fingerprint unlock
+      icon: mdi:fingerprint
+      suggested_display_precision: 0
+    - dp_id: 13
+      translation_key: unlock_password
+      name: Code unlock
+      icon: mdi:keyboard-outline
+      suggested_display_precision: 0
+    - dp_id: 14
+      translation_key: unlock_dynamic
+      name: Dynamic code unlock
+      icon: mdi:form-textbox-password
+      suggested_display_precision: 0
+    - dp_id: 15
+      translation_key: unlock_card
+      name: Card unlock
+      icon: mdi:nfc-variant
+      suggested_display_precision: 0
+    - dp_id: 19
+      translation_key: unlock_ble
+      name: Bluetooth unlock
+      icon: mdi:bluetooth
+      suggested_display_precision: 0
+    - dp_id: 55
+      translation_key: unlock_temporary
+      name: Temporary code unlock
+      icon: mdi:timer-lock-open-outline
+      suggested_display_precision: 0
+    - dp_id: 62
+      translation_key: unlock_phone_remote
+      name: Remote unlock
+      icon: mdi:cellphone-key
+      suggested_display_precision: 0
+    - dp_id: 21
+      translation_key: alarm_lock
+      device_class: enum
+      options:
+        - wrong_finger
+        - wrong_password
+        - wrong_card
+        - low_battery
+    - dp_id: 9
+      translation_key: battery_state
+      device_class: enum
+      entity_category: diagnostic
+      options:
+        - high
+        - medium
+        - low
+        - poweroff

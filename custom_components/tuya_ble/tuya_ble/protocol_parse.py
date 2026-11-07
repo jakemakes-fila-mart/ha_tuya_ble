@@ -11,6 +11,7 @@ import time
 from Crypto.Cipher import AES
 
 from .const import (
+    REDACTED,
     TuyaBLECode,
     TuyaBLEDataPointType,
 )
@@ -117,14 +118,15 @@ class TuyaBLEProtocolParseMixin(TuyaBLEProtocolSendMixin):
                     raise TuyaBLEDataFormatError()
 
             if _LOGGER.isEnabledFor(logging.DEBUG):
+                sensitive = self._datapoints.is_sensitive(dp_id)
                 _LOGGER.debug(
                     "%s: Received DP id=%s type=%s flags=0x%02x raw=%s decoded=%s",
                     self.address,
                     dp_id,
                     dp_type.name,
                     flags,
-                    raw_value.hex(),
-                    value,
+                    REDACTED if sensitive else raw_value.hex(),
+                    REDACTED if sensitive else value,
                 )
             datapoints.append(
                 self._datapoints.update_from_device(

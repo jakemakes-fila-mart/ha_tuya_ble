@@ -183,8 +183,8 @@ class TuyaBLECoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self.device.address,
                     update.dp_id,
                     update.dp_type.name,
-                    raw.hex(),
-                    update.value,
+                    update.loggable(raw.hex()),
+                    update.loggable(update.value),
                     self.device.category,
                     self.device.product_id,
                 )
@@ -196,8 +196,8 @@ class TuyaBLECoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self.device.address,
                     update.dp_id,
                     update.dp_type.name,
-                    raw.hex(),
-                    update.value,
+                    update.loggable(raw.hex()),
+                    update.loggable(update.value),
                     self.device.category,
                     self.device.product_id,
                 )

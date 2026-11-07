@@ -23,8 +23,12 @@ from Crypto.Cipher import AES
 
 from .const import (
     CHARACTERISTIC_NOTIFY,
+    LOCK_CATEGORIES,
+    LOCK_FALLBACK_SENSITIVE_DP_IDS,
     MANUFACTURER_DATA_ID,
+    NO_RESEND_DP_CODES,
     PAIRING_REQUEST_LENGTH,
+    SENSITIVE_DP_CODES,
     SERVICE_UUID,
     DPType,
     TuyaBLECode,
@@ -173,6 +177,8 @@ class TuyaBLEDevice(TuyaBLEProtocol):
         self._datapoints = TuyaBLEDataPoints(self)
         self._function: dict[str, TuyaBLEDeviceFunction] = {}
         self._status_range: dict[str, TuyaBLEDeviceFunction] = {}
+        self._sensitive_dp_ids: frozenset[int] = frozenset()
+        self._no_resend_dp_ids: frozenset[int] = frozenset()
 
         self._reconnect_task: asyncio.Task[None] | None = None
         self._resend_task: asyncio.Task[None] | None = None
@@ -323,6 +329,13 @@ class TuyaBLEDevice(TuyaBLEProtocol):
         return ""
 
     @property
+    def check_code(self) -> str | None:
+        """Return the lock check code for DP 71 commands, if the cloud gave one."""
+        if self._device_info is not None:
+            return self._device_info.check_code
+        return None
+
+    @property
     def category(self) -> str:
         """Return the device category."""
         if self._device_info is not None:
@@ -382,6 +395,16 @@ class TuyaBLEDevice(TuyaBLEProtocol):
         """Return the device status range definitions."""
         return self._status_range
 
+    @property
+    def sensitive_dp_ids(self) -> frozenset[int]:
+        """Return the DP ids whose values carry a PIN or unlock credential."""
+        return self._sensitive_dp_ids
+
+    @property
+    def no_resend_dp_ids(self) -> frozenset[int]:
+        """Return the DP ids a failed write must never be replayed for."""
+        return self._no_resend_dp_ids
+
     def append_functions(
         self,
         function: list[dict[str, Any]] | None,
@@ -390,6 +413,21 @@ class TuyaBLEDevice(TuyaBLEProtocol):
         """Parse and store function/status_range credential lists."""
         self._append_function_list(function, self._function, "function")
         self._append_function_list(status_range, self._status_range, "status")
+        by_code = {
+            code: entry.dp_id
+            for table in (self._function, self._status_range)
+            for code, entry in table.items()
+        }
+        sensitive = {dp for code, dp in by_code.items() if code in SENSITIVE_DP_CODES}
+        if self.category in LOCK_CATEGORIES:
+            # Redaction only: entries saved before the cloud function lists were
+            # stored know no codes, and a lock's DP 1/71 reports echo the PIN or
+            # check code. Commands never use these ids without a listed code.
+            sensitive |= LOCK_FALLBACK_SENSITIVE_DP_IDS
+        self._sensitive_dp_ids = frozenset(sensitive)
+        self._no_resend_dp_ids = self._sensitive_dp_ids | frozenset(
+            dp for code, dp in by_code.items() if code in NO_RESEND_DP_CODES
+        )
 
     def _append_function_list(
         self,
@@ -588,11 +626,22 @@ class TuyaBLEDevice(TuyaBLEProtocol):
         if client is None:
             return False
         self._client = client
-        return (
-            await self._try_start_notifications()
-            and await self._try_send_device_info()
-            and await self._try_send_pairing()
-        )
+        try:
+            return (
+                await self._try_start_notifications()
+                and await self._try_send_device_info()
+                and await self._try_send_pairing()
+            )
+        except asyncio.CancelledError:
+            # A caller's deadline (a lock command's send timeout) cancelled the
+            # handshake. Drop the half-configured connection now, inside the
+            # connect lock, so its late disconnect callback cannot clear the
+            # next session's client, then let the cancellation propagate.
+            self._client = None
+            self._is_paired = False
+            with suppress(Exception):
+                await client.disconnect()
+            raise
 
     async def _connect_with_retries(self) -> None:
         """Try connecting up to 100 times, raising on failure."""

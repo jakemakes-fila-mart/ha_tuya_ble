@@ -55,6 +55,10 @@ CONF_FUNCTIONS: Final = "functions"
 CONF_STATUS_RANGE: Final = "status_range"
 CONF_LOCAL_SCHEMA: Final = "local_schema"
 CONF_CLOUD_INFO: Final = "cloud_info"
+# Per-lock 8-character code a jtmspro lock checks on a DP 71 lock/unlock
+# command. It is enough to unlock the door, so it is redacted from diagnostics
+# and never logged.
+CONF_CHECK_CODE: Final = "check_code"
 
 TUYA_DOMAIN: Final = "tuya"
 

@@ -41,6 +41,7 @@ Programming (series of actions) is implemented for Fingerbot Plus. Exposed entit
 - Smart Cylinder Lock (product_ids `z7lj676i`, `hs21i377`).
 - CentralAcesso (product_id `ebd5e0uauqx0vfsp`).
 - HU06 Smart Lock (product_id `stugc8dl`).
+- Smart Lock lever handle (product_id `6hqka6he`). Lock/unlock through the DP 71 `ble_unlock_check` frame once the cloud supplies the lock's check code; keypad PINs through the `tuya_ble.add_pin` and `tuya_ble.delete_pin` actions.
 
 Supports lock/unlock, alarm events, fingerprint/card/password unlock tracking, and battery status.
 
